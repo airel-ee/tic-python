@@ -1,7 +1,7 @@
 import collections
 import json
 import time
-from typing import Any, Dict, Union
+from typing import Any, Dict, Optional, Union
 import random
 
 try:
@@ -14,7 +14,7 @@ try:
 except ImportError:
     SerialInterface = None
 
-from .exceptions import ReceiveTimeout, DecodingError, DeviceErrorResponse, TicError
+from .exceptions import EncodingError, ReceiveTimeout, DecodingError, DeviceErrorResponse, TicError
 
 CONNECTION_INIT_TIMEOUT = 1.0
 
@@ -118,7 +118,7 @@ class Tic:
 
     def receive_message(self, timeout: float = 1.0) -> Union[Any, None]:
         """
-        Returns next message from the device
+        Returns next message received from the device
 
         The message may be returned from the internal FIFO buffer of the object where it was stored when a response to a
         command to the device was being expected.
@@ -161,7 +161,11 @@ class Tic:
             raise TicError(f"Unexpected response: {response!r}")
 
     def _send_json_msg(self, value: Any):
-        msg = json.dumps(value).encode("utf8")
+        try:
+            msg = json.dumps(value, allow_nan=False).encode("utf8")
+        except ValueError as e:
+            raise EncodingError("Failed to encode message") from e
+
         self.port.write(msg)
 
     def _init_connection(self):
@@ -182,7 +186,7 @@ class Tic:
 
         raise ReceiveTimeout
 
-    def ping(self, payload: str):
+    def ping(self, payload: str) -> str:
         """
         Sends a ping command to the device
 
@@ -192,7 +196,7 @@ class Tic:
         self._send_json_msg({"method": "ping", "params": payload})
         return self._receive_response()
 
-    def get_system_info(self):
+    def get_system_info(self) -> Dict[str, Any]:
         """
         Requests system information from the device
 
@@ -201,7 +205,7 @@ class Tic:
         self._send_json_msg({"method": "get_system_info"})
         return self._receive_response()
 
-    def get_debug_info(self):
+    def get_debug_info(self) -> Dict[str, Any]:
         """
         Requests debug information from the device
 
@@ -210,36 +214,77 @@ class Tic:
         self._send_json_msg({"method": "get_debug_info"})
         return self._receive_response()
 
-    def get_settings(self):
+    def get_settings(self) -> Dict[str, Any]:
+        """
+        Requests user settings from the device
+
+        :return: debug information dict
+        """
         self._send_json_msg({"method": "get_settings"})
         return self._receive_response()
 
     def set_settings(self, settings_map: Dict[str, Any]):
-        self._send_json_msg({"method": "set_settings", "params": settings_map})
-        return self._receive_response()
+        """
+        Updates user settings on the device
 
-    def reset_settings(self, settings_map: Union[None | Dict[str, Any]] = None):
+        :param settings_map: dict of settings
+        """
+        self._send_json_msg({"method": "set_settings", "params": settings_map})
+        self._wait_ok_response()
+
+    def reset_settings(self, settings_map: Optional[Dict[str, Any]] = None):
+        """
+        Resets and update user settings on the device
+
+        :param settings_map: (Optional) dict of settings to apply after reset
+        """
         if settings_map:
             self._send_json_msg({"method": "reset_settings", "params": settings_map})
         else:
             self._send_json_msg({"method": "reset_settings"})
-        return self._receive_response()
+        self._wait_ok_response()
+
+    def store_settings(self):
+        """
+        Stores the currently active user settings in the non-volatile memory of the device
+        """
+        self._send_json_msg({"method": "store_settings"})
+        self._wait_ok_response()
 
     def hard_reset(self):
+        """
+        Requests an MCU reset of the device
+
+        The Tic will restart and connection will be lost. After this method :py:func:`close` should be called and the
+        object destroyed. Some exceptions may still be thrown.
+        """
         self._send_json_msg({"method": "hard_reset"})
 
     def enter_dfu(self):
+        """
+        Requests the MCU to reset and enter firware update mode
+
+        The Tic will restart and connection will be lost. After this method :py:func:`close` should be called and the
+        object destroyed. Some exceptions may still be thrown.
+        """
         self._send_json_msg({"method": "enter_dfu"})
 
     def set_mode(self, mode: str):
+        """
+        Sets the device operating mode
+
+        :param mode: New operating mode of the device. Valid modes are: run, run_swapped, zero, stop.
+        """
         self._send_json_msg({"method": "set_mode", "params": mode})
         self._wait_ok_response()
 
     def get_flag_descriptions(self):
+        """
+        Requests textual descriptions of the record flags that the device uses
+
+        :return: dict of flag descriptions
+        """
         self._send_json_msg({"method": "get_flag_descriptions"})
         response = self._receive_response()
         return {k: v for (k, v) in response}
 
-    def store_settings(self):
-        self._send_json_msg({"method": "store_settings"})
-        self._wait_ok_response()

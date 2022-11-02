@@ -1,2 +1,2 @@
-from .exceptions import DeviceErrorResponse, EncodingError, TicError, ReceiveTimeout
 from .device import Tic
+from .exceptions import CommunicationError, DecodingError, DeviceErrorResponse, EncodingError, ReceiveTimeout, TicError
