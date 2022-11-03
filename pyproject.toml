@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "tic"
+name = "airel.tic"
 version = "1.0.0"
 authors = [
     { name = "Airel OÜ", email = "info@airel.ee" },
@@ -22,6 +22,14 @@ dependencies = [
     "pyusb==1.2.1",
 ]
 
-optional-dependencies = [
-    "pyserial==3.5",
+[optional-dependencies]
+serial = ["pyserial==3.5"]
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "/dist",
+    "/docs",
 ]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/airel"]
