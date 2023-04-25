@@ -22,16 +22,22 @@ def _open_libusb_device(serial_number: Union[str, None]) -> usb.core.Device:
 
     devices = []
 
-    for d in usb.core.find(find_all=True, idVendor=VUSB_VENDOR_ID, idProduct=VUSB_PRODUCT_ID):
+    def match(d):
+        if d.idVendor != VUSB_VENDOR_ID or d.idProduct != VUSB_PRODUCT_ID:
+            return False
+
         if d.manufacturer != "Airel":
-            continue
+            return False
 
         if d.product != "TIC":
-            continue
+            return False
 
         if (serial_number is not None) and (d.serial_number != serial_number):
-            continue
+            return False
 
+        return True
+
+    for d in usb.core.find(find_all=True, custom_match=match):
         devices.append(d)
 
     if not devices:

@@ -287,4 +287,3 @@ class Tic:
         self._send_json_msg({"method": "get_flag_descriptions"})
         response = self._receive_response()
         return {k: v for (k, v) in response}
-
