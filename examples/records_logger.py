@@ -14,16 +14,15 @@ import signal
 import sys
 import threading
 
+import airel.tic
 import pytz
 import yaml
 
-import airel.tic
-
 # Averaging period of the TIC records
-AVERAGING_PERIOD = 10.0
+AVERAGING_PERIOD = 5
 
 # Measurement cycle as a list of operating modes and durations in seconds
-MEASUREMENT_CYCLE = [("run", 240), ("zero", 60)]
+MEASUREMENT_CYCLE = [("zero", 60), ("run", 60), ("run_swapped", 60)]
 
 # Shift the measurement cycle by -15 seconds which is the settling time after operating mode switch of the TIC, so that
 # correct data records will start at full minutes
@@ -38,10 +37,11 @@ FIELDS = ["opmode", "is_settling", "begin_time_ms", "end_time_ms", "pos_concentr
           "a_cev_voltage_control_mean", "a_cev_voltage_control_stddev", "a_flow_rate_raw_mean",
           "a_flow_rate_raw_stddev", "a_flow_rate_mean", "a_flow_rate_stddev", "a_flow_rate_target_mean",
           "a_flow_rate_target_stddev", "a_flow_rate_control_mean", "a_flow_rate_control_stddev",
-          "b_cev_voltage_raw_mean", "b_cev_voltage_raw_stddev", "b_cev_voltage_mean", "b_cev_voltage_stddev",
-          "b_cev_voltage_target_mean", "b_cev_voltage_target_stddev", "b_cev_voltage_control_mean",
-          "b_cev_voltage_control_stddev", "b_flow_rate_raw_mean", "b_flow_rate_raw_stddev", "b_flow_rate_mean",
-          "b_flow_rate_stddev", "b_flow_rate_target_mean", "b_flow_rate_target_stddev", "b_flow_rate_control_mean",
+          "a_flow_rate_tacho_mean", "a_flow_rate_tacho_stddev", "b_cev_voltage_raw_mean", "b_cev_voltage_raw_stddev",
+          "b_cev_voltage_mean", "b_cev_voltage_stddev", "b_cev_voltage_target_mean", "b_cev_voltage_target_stddev",
+          "b_cev_voltage_control_mean", "b_cev_voltage_control_stddev", "b_flow_rate_raw_mean",
+          "b_flow_rate_raw_stddev", "b_flow_rate_mean", "b_flow_rate_stddev", "b_flow_rate_target_mean",
+          "b_flow_rate_target_stddev", "b_flow_rate_control_mean", "b_flow_rate_tacho_mean", "b_flow_rate_tacho_stddev",
           "b_flow_rate_control_stddev", "temperature_mean", "temperature_stddev", "humidity_mean", "humidity_stddev",
           "pressure_mean", "pressure_stddev", "env_sensor_sample_counter", "env_sensor_error_counter",
           "a_cev_adc_sample_counter", "a_cev_voltage_correction_counter", "b_cev_adc_sample_counter",
@@ -64,6 +64,7 @@ MONITORED_COUNTERS = [
 ]
 
 UTC = datetime.timezone.utc
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -112,6 +113,9 @@ def collect_data(device, stop_event):
         "run_at_start": True,
         "extended_record_fields_enabled": True,
         "non_run_records_hidden": False,
+        # "allow_power_from_usb_data": True
+        # "zero_settling_duration": 1.5,
+        # "run_settling_duration": 17.5,
     })
     logging.info(f"Settings: {device.get_settings()}")
 
@@ -128,7 +132,8 @@ def collect_data(device, stop_event):
         ts = now.timestamp()
         mode = cycle.get_mode(ts)
         if mode is not None:
-            logging.debug(f"{now:%H:%M:%S.%f} set opmode {mode} until {datetime.datetime.fromtimestamp(cycle.next_change)}")
+            logging.debug(
+                f"{now:%H:%M:%S.%f} set opmode {mode} until {datetime.datetime.fromtimestamp(cycle.next_change)}")
             device.set_mode(mode)
 
         msg = device.receive_message(timeout=min(cycle.next_change - ts, 1.0))
@@ -141,6 +146,12 @@ def collect_data(device, stop_event):
             # Ignore record in case the setting to include extended record fields has not yet kicked in
             if "a_electrometer_current_mean" not in r:
                 continue
+
+            for f in FIELDS:
+                if r.get(f, None) is None:
+                    r[f] = math.nan
+
+            r["is_settling"] = 1 if r["is_settling"] else 0
 
             now = datetime.datetime.utcnow().replace(tzinfo=UTC).astimezone(LOCAL_TZ)
 
@@ -164,15 +175,13 @@ def collect_data(device, stop_event):
             out_file.write("\n")
             out_file.flush()
 
-            for f in FIELDS:
-                if r[f] is None:
-                    r[f] = math.nan
-
             print(
                 f"{begin_time:%H:%M:%S.%f} {r['begin_time_ms'] / 1000:9.1f} {(r['end_time_ms'] - r['begin_time_ms']) / 1000:9.1f}"
                 f" {r['opmode']:12} {'settl' if r['is_settling'] else 'ok   '}"
                 f" pos_conc: {r['pos_concentration_mean']:+11.3f}"
                 f" neg_conc: {r['neg_concentration_mean']:+11.3f}"
+                f" a: {r['a_electrometer_current_mean']:+11.3f} {r['a_electrometer_current_raw_mean']:+11.3f} {r['a_electrometer_current_raw_mean'] - r['a_electrometer_current_mean']:+11.3f}"
+                f" b: {r['b_electrometer_current_mean']:+11.3f} {r['b_electrometer_current_raw_mean']:+11.3f} {r['b_electrometer_current_raw_mean'] - r['b_electrometer_current_mean']:+11.3f}"
                 f" flags:{[flag_map[f] for f in r['flags']]}"
             )
 
@@ -276,6 +285,7 @@ class MeasurementCycle:
                 else:
                     self.next_change += duration
                     rel_t -= duration
+
 
 if __name__ == '__main__':
     main()

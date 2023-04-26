@@ -10,7 +10,7 @@ device.reset_settings({
     "auto_zero_enabled": True,
     "extended_record_fields_enabled": True,
     "non_run_records_hidden": False,
-    "averaging_period": 10.0,
+    "averaging_period": 30.0,
 })
 
 print("Acive settings:", device.get_settings())
