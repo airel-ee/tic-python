@@ -22,7 +22,6 @@ def decode(packet: bytes) -> bytes:
     try:
         contents = cobs.decode(packet)
     except cobs.DecodeError as e:
-        print(packet)
         raise DecodingError(f"decoding error: {e}")
 
     if len(contents) < 2:
