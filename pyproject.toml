@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "airel.tic"
-version = "1.0.0"
+version = "1.1.dev0"
 authors = [
     { name = "Airel OÜ", email = "info@airel.ee" },
 ]
