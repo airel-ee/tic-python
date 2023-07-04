@@ -278,6 +278,13 @@ class Tic:
         self._send_json_msg({"method": "set_mode", "params": mode})
         self._wait_ok_response()
 
+    def set_custom_mode(self, params: Dict[str, Any]):
+        """
+        Sets the device operating mode to a custom mode
+        """
+        self._send_json_msg({"method": "set_custom_mode", "params": params})
+        self._wait_ok_response()
+
     def get_flag_descriptions(self):
         """
         Requests textual descriptions of the record flags that the device uses
