@@ -10,7 +10,7 @@ authors = [
 ]
 description = "Python package for controlling Airel Tiny Ion Counter devices"
 readme = "README.md"
-requires-python = ">=3.7"
+requires-python = ">=3.8"
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
@@ -24,6 +24,11 @@ dependencies = [
 
 [optional-dependencies]
 serial = ["pyserial==3.5"]
+logger = [
+    "PyYAML==6.0",
+    "pydantic==2.4.2",
+    "pytz==2023.3",
+]
 
 [tool.hatch.build.targets.sdist]
 exclude = [
