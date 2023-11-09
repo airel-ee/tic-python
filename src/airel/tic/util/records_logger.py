@@ -6,10 +6,9 @@ import signal
 import sys
 import threading
 
-import yaml
-from pydantic import BaseModel, PositiveFloat, ConfigDict
-
 import airel.tic
+import yaml
+from pydantic import BaseModel, PositiveFloat, ConfigDict, ValidationError
 
 FIELDS = [
     "is_settling",
@@ -103,7 +102,7 @@ UTC = datetime.timezone.utc
 
 
 class Config(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     averaging_period: PositiveFloat = 10
     settling_time: PositiveFloat = 30
@@ -118,7 +117,10 @@ class Config(BaseModel):
 def run(connection, config):
     setup_logging()
 
-    config = Config(**config)
+    try:
+        config = Config(**config)
+    except ValidationError as e:
+        raise airel.tic.TicError(f"Invalid configuration: {str(e)}") from None
 
     stop_event = threading.Event()
 
