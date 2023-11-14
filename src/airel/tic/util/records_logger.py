@@ -1,3 +1,4 @@
+import dataclasses
 import datetime
 import logging
 import math
@@ -5,9 +6,13 @@ import pathlib
 import signal
 import sys
 import threading
+import multiprocessing
+import time
+from typing import Union
 
 import airel.tic
 import yaml
+from airel.tic.libusb_interface import find_all, DevUsbAddress, LibusbInterface
 from pydantic import BaseModel, PositiveFloat, ConfigDict, ValidationError
 
 FIELDS = [
@@ -114,7 +119,7 @@ class Config(BaseModel):
     custom_settings: dict = {}
 
 
-def run(connection, config):
+def run(connection: Union[str, None], config: dict):
     setup_logging()
 
     try:
@@ -147,13 +152,94 @@ def run(connection, config):
     logging.info("Measurements stopped")
 
 
+@dataclasses.dataclass
+class TicProcess:
+    dev_address: DevUsbAddress
+    process: multiprocessing.Process
+
+
+def run_many(config):
+    setup_logging()
+
+    stop_event = multiprocessing.Event()
+
+    stop_request = False
+
+    def set_stop_event(sig, frame):
+        nonlocal stop_request
+        stop_request = True
+
+    signal.signal(signal.SIGINT, set_stop_event)
+    signal.signal(signal.SIGTERM, set_stop_event)
+
+    exclude = set()
+    processes = []
+
+    logging.info("Starting measurements")
+
+    while not stop_request:
+        dev_address_list = find_all(exclude_bus_address=exclude)
+        for d in dev_address_list:
+            logging.info(f"Found new device: {d.serial_number}")
+            process = multiprocessing.Process(target=run_multiprocessing, args=(d, config, stop_event))
+            process.daemon = True
+            process.start()
+            processes.append(TicProcess(dev_address=d, process=process))
+            exclude.add((d.bus, d.address))
+
+        dead_processes = [(i, p) for i, p in enumerate(processes) if not p.process.is_alive()]
+
+        for i, p in dead_processes[::-1]:
+            del processes[i]
+            exclude.remove((p.dev_address.bus, p.dev_address.address))
+            logging.info(f"Device {p.dev_address.serial_number} process died")
+
+        time.sleep(1.0)
+
+    stop_event.set()
+
+    for p in processes:
+        logging.info(f"Stopping {p.dev_address.serial_number}")
+        p.process.join()
+
+    pass
+
+
+def run_multiprocessing(dev_address: DevUsbAddress, config: dict, stop_event: multiprocessing.Event):
+    logger = logging.getLogger(dev_address.serial_number)
+
+    try:
+        config = Config(**config)
+    except ValidationError as e:
+        logger.error(f"Invalid configuration: {str(e)}")
+        return
+
+    logger.info("Starting measurements")
+    logger.info(f"Using configuration: {config}")
+
+    while not stop_event.is_set():
+        try:
+            interface = LibusbInterface(
+                serial_number=dev_address.serial_number, bus_address=(dev_address.bus, dev_address.address)
+            )
+            device = airel.tic.Tic(interface=interface)
+            collect_data(device, stop_event, config=config)
+            device.close()
+        except airel.tic.TicError as e:
+            logging.error(f"TIC error: {type(e).__name__} {e}")
+            return
+
+    logging.info("Measurements stopped")
+
+
 def collect_data(device: airel.tic.Tic, stop_event: threading.Event, config: Config):
     system_info = device.get_system_info()
     serial_number = system_info["serial_number"]
 
-    logging.info(f"Connected to {serial_number}")
-    logging.debug(f"System info: {system_info}")
-    logging.debug(f"Debug info: {device.get_debug_info()}")
+    logger = logging.getLogger(serial_number)
+    logger.info(f"Connected to {serial_number}")
+    logger.debug(f"System info: {system_info}")
+    logger.debug(f"Debug info: {device.get_debug_info()}")
 
     settings = {
         "auto_zero_enabled": False,
@@ -170,7 +256,7 @@ def collect_data(device: airel.tic.Tic, stop_event: threading.Event, config: Con
     settings.update(config.custom_settings)
 
     device.reset_settings(settings)
-    logging.info(f"Settings: {device.get_settings()}")
+    logger.info(f"Settings: {device.get_settings()}")
 
     flag_map = device.get_flag_descriptions()
 
@@ -186,7 +272,7 @@ def collect_data(device: airel.tic.Tic, stop_event: threading.Event, config: Con
         ts = now.timestamp()
         mode = cycle.get_mode(ts)
         if mode is not None:
-            logging.debug(
+            logger.info(
                 f"{now:%H:%M:%S.%f} set opmode {mode} until {datetime.datetime.fromtimestamp(cycle.next_change)}"
             )
             if isinstance(mode, dict):
@@ -242,8 +328,8 @@ def collect_data(device: airel.tic.Tic, stop_event: threading.Event, config: Con
             out_file.flush()
 
             # fmt: off
-            print(
-                f"{begin_time:%H:%M:%S.%f} {r['begin_time_ms'] / 1000:9.1f} {(r['end_time_ms'] - r['begin_time_ms']) / 1000:9.1f} {r['opmode']:12} {'settl' if r['is_settling'] else 'ok   '}"
+            logger.info(
+                f"{r['opmode'] + '*' if r['is_settling'] else ' ':13}"
                 f" pos_conc: {r['pos_concentration_mean']:10.3f} neg_conc: {r['neg_concentration_mean']:10.3f} "
                 f" a: {r['a_electrometer_current_mean']:+9.2f} {r['a_electrometer_current_raw_mean'] - r['a_electrometer_current_mean']:+6.2f}"
                 f" b: {r['b_electrometer_current_mean']:+9.2f} {r['b_electrometer_current_raw_mean'] - r['b_electrometer_current_mean']:+6.2f}"
@@ -254,7 +340,7 @@ def collect_data(device: airel.tic.Tic, stop_event: threading.Event, config: Con
 
             for f in MONITORED_COUNTERS:
                 if r[f] != counter_values[f]:
-                    print(f"  {f}: {counter_values[f]} -> {r[f]}")
+                    logger.info(f"  {f}: {counter_values[f]} -> {r[f]}")
                     counter_values[f] = r[f]
 
         elif event_type == "raw_em_record":
@@ -275,7 +361,7 @@ def collect_data(device: airel.tic.Tic, stop_event: threading.Event, config: Con
                     out_file.write(f"{now.timestamp()},{t},{ch},{value}\n")
 
         else:
-            print("Other message:", msg)
+            logger.debug("Other message:", msg)
 
 
 def write_records_file_header(outfile):
@@ -331,11 +417,11 @@ def format_field(x):
         return str(x)
 
 
-def setup_logging():
+def setup_logging(connection=None):
     logger = logging.getLogger()
 
-    hdlr = logging.StreamHandler(sys.stderr)
-    hdlr.setFormatter(logging.Formatter("%(asctime)s %(levelname)s: %(message)s"))
+    hdlr = logging.StreamHandler(sys.stdout)
+    hdlr.setFormatter(logging.Formatter(f"%(asctime)s %(name)10s %(levelname)s: %(message)s", datefmt="%H:%M:%S"))
     hdlr.setLevel(logging.DEBUG)
     logger.addHandler(hdlr)
 

@@ -24,7 +24,7 @@ class Tic:
     Tiny Ion Counter connection class
     """
 
-    def __init__(self, port_name: Union[str, None] = None):
+    def __init__(self, port_name: Union[str, None] = None, interface: Any = None):
         """
         Opens a connection to a TIC device
 
@@ -58,24 +58,27 @@ class Tic:
 
         """
 
-        self.port = None
-        debug_comm = False
+        if interface is None:
+            self.port = None
+            debug_comm = False
 
-        if port_name and port_name.startswith("usb:"):
-            if LibusbInterface is None:
-                raise TicError(
-                    "LibUSB connection not supported. Please check if pyusb package is installed.")
-            self.port = LibusbInterface(port_name[4:], debug=debug_comm)
-        elif port_name and port_name.startswith("serial:"):
-            if SerialInterface is None:
-                raise TicError(
-                    "Serial connection not supported. Please check if pyserial package is installed.")
-            self.port = SerialInterface(port_name[7:], debug=debug_comm)
+            if port_name and port_name.startswith("usb:"):
+                if LibusbInterface is None:
+                    raise TicError("LibUSB connection not supported. Please check if pyusb package is installed.")
+                self.port = LibusbInterface(port_name[4:], debug=debug_comm)
+            elif port_name and port_name.startswith("serial:"):
+                if SerialInterface is None:
+                    raise TicError("Serial connection not supported. Please check if pyserial package is installed.")
+                self.port = SerialInterface(port_name[7:], debug=debug_comm)
+            else:
+                if LibusbInterface is None:
+                    raise TicError(
+                        "LibUSB connection not supported. Please check if pyusb package is installed or use serial"
+                        " connection"
+                    )
+                self.port = LibusbInterface(port_name, debug=debug_comm)
         else:
-            if LibusbInterface is None:
-                raise TicError(
-                    "LibUSB connection not supported. Please check if pyusb package is installed or use serial connection")
-            self.port = LibusbInterface(port_name, debug=debug_comm)
+            self.port = interface
 
         self.message_queue = collections.deque()
         self._init_connection()

@@ -1,4 +1,5 @@
-from typing import Union
+import dataclasses
+from typing import Union, Set
 
 import usb.core
 import usb.util
@@ -6,8 +7,8 @@ import usb.util
 from .encoding import decode, encode
 from .exceptions import *
 
-VUSB_VENDOR_ID = 0x16c0
-VUSB_PRODUCT_ID = 0x27dd
+VUSB_VENDOR_ID = 0x16C0
+VUSB_PRODUCT_ID = 0x27DD
 
 TIC_IN_EP = 0x82
 TIC_OUT_EP = 0x01
@@ -16,13 +17,54 @@ TIC_INTERFACE = 0
 RECEIVE_BUFFER_SIZE = 10 * 1024
 
 
-def _open_libusb_device(serial_number: Union[str, None]) -> usb.core.Device:
+@dataclasses.dataclass
+class DevUsbAddress:
+    bus: int
+    address: int
+    serial_number: str
+
+
+def find_all(exclude_bus_address: Union[set[tuple[(int, int)]], None] = None) -> [DevUsbAddress]:
+    devices = []
+
+    if exclude_bus_address is None:
+        exclude_bus_address = {}
+
+    def match(d):
+        if (d.bus, d.address) in exclude_bus_address:
+            return False
+
+        if d.idVendor != VUSB_VENDOR_ID or d.idProduct != VUSB_PRODUCT_ID:
+            return False
+
+        if d.manufacturer != "Airel":
+            return False
+
+        if d.product != "TIC":
+            return False
+
+        print(d.address)
+
+        return True
+
+    for d in usb.core.find(find_all=True, custom_match=match):
+        devices.append(DevUsbAddress(bus=d.bus, address=d.address, serial_number=d.serial_number))
+
+    return devices
+
+
+def _open_libusb_device(
+    serial_number: Union[str, None], bus_address: Union[tuple[(int, int)], None] = None
+) -> usb.core.Device:
     if serial_number in ["", "*", None]:
         serial_number = None
 
     devices = []
 
     def match(d):
+        if bus_address is not None and (d.bus, d.address) != bus_address:
+            return False
+
         if d.idVendor != VUSB_VENDOR_ID or d.idProduct != VUSB_PRODUCT_ID:
             return False
 
@@ -44,16 +86,18 @@ def _open_libusb_device(serial_number: Union[str, None]) -> usb.core.Device:
         raise TicError(f"device not found")
     elif len(devices) > 1:
         devices_str = [d.serial_number for d in devices]
-        raise TicError("found multiple matching devices: " + ', '.join(devices_str))
+        raise TicError("found multiple matching devices: " + ", ".join(devices_str))
     else:
         return devices[0]
 
 
 class LibusbInterface:
-    def __init__(self, port_name: Union[str, None], debug: bool = False):
+    def __init__(
+        self, serial_number: Union[str, None], bus_address: Union[tuple[(int, int)], None] = None, debug: bool = False
+    ):
         try:
             self.device = None
-            self.device = _open_libusb_device(port_name)
+            self.device = _open_libusb_device(serial_number=serial_number, bus_address=bus_address)
             self.buf = bytearray()
             try:
                 if self.device.is_kernel_driver_active(TIC_INTERFACE):
@@ -98,7 +142,7 @@ class LibusbInterface:
                 raise CommunicationError(f"read error: {e}") from e
 
         packet = self.buf[:zero_pos]
-        del self.buf[:zero_pos + 1]
+        del self.buf[: zero_pos + 1]
         return decode(packet)
 
     def flush_read(self):
@@ -115,7 +159,7 @@ class LibusbInterface:
 
         try:
             pos = self.buf.rindex(0)
-            del self.buf[:pos + 1]
+            del self.buf[: pos + 1]
         except ValueError:
             del self.buf[:]
 
