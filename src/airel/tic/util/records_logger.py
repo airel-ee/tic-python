@@ -421,11 +421,17 @@ def setup_logging(connection=None):
     logger = logging.getLogger()
 
     hdlr = logging.StreamHandler(sys.stdout)
-    hdlr.setFormatter(logging.Formatter(f"%(asctime)s %(name)10s %(levelname)s: %(message)s", datefmt="%H:%M:%S"))
+    hdlr.setFormatter(Formatter(f"%(asctime)s %(name)10s %(levelname)s: %(message)s"))
     hdlr.setLevel(logging.DEBUG)
     logger.addHandler(hdlr)
 
     logger.setLevel(logging.DEBUG)
+
+
+class Formatter(logging.Formatter):
+    def formatTime(self, record, datefmt=...):
+        t = datetime.datetime.fromtimestamp(record.created)
+        return f"{t:%H:%M:%S}.{int(t.microsecond / 1000):03d}"
 
 
 class TimedFile:
