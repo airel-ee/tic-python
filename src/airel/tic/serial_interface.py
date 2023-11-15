@@ -43,7 +43,7 @@ class SerialInterface:
                 raise CommunicationError(f"read error: {e}") from e
 
         packet = self.buf[:pos]
-        del self.buf[:pos + 1]
+        del self.buf[: pos + 1]
         return decode(packet)
 
     def flush_read(self):
@@ -60,7 +60,7 @@ class SerialInterface:
 
         try:
             pos = self.buf.rindex(0)
-            del self.buf[:pos + 1]
+            del self.buf[: pos + 1]
         except ValueError:
             del self.buf[:]
 

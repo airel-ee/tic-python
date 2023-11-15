@@ -28,7 +28,7 @@ def decode(packet: bytes) -> bytes:
         raise DecodingError("packet too short")
 
     crc = update_checksum(0, contents[:-2])
-    crc_bytes = crc.to_bytes(2, 'little')
+    crc_bytes = crc.to_bytes(2, "little")
     if crc_bytes != contents[-2:]:
         raise DecodingError("invalid crc")
 
@@ -39,4 +39,4 @@ def encode(payload: bytes) -> bytes:
     if len(payload) == 0:
         return b""
     crc = update_checksum(0, payload)
-    return cobs.encode(payload + crc.to_bytes(2, 'little'))
+    return cobs.encode(payload + crc.to_bytes(2, "little"))
