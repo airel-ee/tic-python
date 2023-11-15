@@ -175,7 +175,7 @@ def run_many(config):
     exclude = set()
     processes = []
 
-    logging.info("Starting measurements")
+    logging.info("Starting logger manager")
 
     while not stop_request:
         dev_address_list = find_all(exclude_bus_address=exclude)
@@ -214,7 +214,7 @@ def run_multiprocessing(dev_address: DevUsbAddress, config: dict, stop_event: mu
         logger.error(f"Invalid configuration: {str(e)}")
         return
 
-    logger.info("Starting measurements")
+    logger.info("Starting logger")
     logger.info(f"Using configuration: {config}")
 
     while not stop_event.is_set():
@@ -229,7 +229,7 @@ def run_multiprocessing(dev_address: DevUsbAddress, config: dict, stop_event: mu
             logging.error(f"TIC error: {type(e).__name__} {e}")
             return
 
-    logging.info("Measurements stopped")
+    logger.info("Logger stopped")
 
 
 def collect_data(device: airel.tic.Tic, stop_event: threading.Event, config: Config):
@@ -329,7 +329,7 @@ def collect_data(device: airel.tic.Tic, stop_event: threading.Event, config: Con
 
             # fmt: off
             logger.info(
-                f"{r['opmode'] + '*' if r['is_settling'] else ' ':13}"
+                f"{r['opmode'] + ('*' if r['is_settling'] else ' '):13}"
                 f" pos_conc: {r['pos_concentration_mean']:10.3f} neg_conc: {r['neg_concentration_mean']:10.3f} "
                 f" a: {r['a_electrometer_current_mean']:+9.2f} {r['a_electrometer_current_raw_mean'] - r['a_electrometer_current_mean']:+6.2f}"
                 f" b: {r['b_electrometer_current_mean']:+9.2f} {r['b_electrometer_current_raw_mean'] - r['b_electrometer_current_mean']:+6.2f}"
@@ -361,7 +361,7 @@ def collect_data(device: airel.tic.Tic, stop_event: threading.Event, config: Con
                     out_file.write(f"{now.timestamp()},{t},{ch},{value}\n")
 
         else:
-            logger.debug("Other message:", msg)
+            logger.debug(f"Other message: {msg}")
 
 
 def write_records_file_header(outfile):
