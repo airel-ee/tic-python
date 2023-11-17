@@ -43,12 +43,13 @@ def find_all(exclude_bus_address: Union[set[tuple[(int, int)]], None] = None) ->
         if d.product != "TIC":
             return False
 
-        print(d.address)
-
         return True
 
-    for d in usb.core.find(find_all=True, custom_match=match):
-        devices.append(DevUsbAddress(bus=d.bus, address=d.address, serial_number=d.serial_number))
+    try:
+        for d in usb.core.find(find_all=True, custom_match=match):
+            devices.append(DevUsbAddress(bus=d.bus, address=d.address, serial_number=d.serial_number))
+    except ValueError as e:
+        raise TicError(f"USB error: {e}") from None
 
     return devices
 
