@@ -8,7 +8,7 @@ import sys
 import threading
 import multiprocessing
 import time
-from typing import Union
+from typing import Union, Callable
 
 import airel.tic
 import yaml
@@ -106,6 +106,11 @@ MONITORED_COUNTERS = [
 UTC = datetime.timezone.utc
 
 
+class Output:
+    def push_record(self, now: datetime.datetime, record: dict):
+        pass
+
+
 class Config(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
@@ -117,6 +122,8 @@ class Config(BaseModel):
     allow_power_from_usb_data: bool = True
     blowers_enabled_during_zero: bool = True
     custom_settings: dict = {}
+    outputs: list[Callable[[str], Output]]
+    enable_file_logging: bool = True
 
 
 def run(connection: Union[str, None], config: dict):
@@ -178,7 +185,13 @@ def run_many(config):
     logging.info("Starting logger manager")
 
     while not stop_request:
-        dev_address_list = find_all(exclude_bus_address=exclude)
+        try:
+            dev_address_list = find_all(exclude_bus_address=exclude)
+        except airel.tic.TicError as e:
+            logging.error(e)
+            time.sleep(1.0)
+            continue
+
         for d in dev_address_list:
             logging.info(f"Found new device: {d.serial_number}")
             process = multiprocessing.Process(target=run_multiprocessing, args=(d, config, stop_event))
@@ -236,10 +249,13 @@ def collect_data(device: airel.tic.Tic, stop_event: threading.Event, config: Con
     system_info = device.get_system_info()
     serial_number = system_info["serial_number"]
 
+    outputs = [o(serial_number) for o in config.outputs]
+    outputs = [o for o in outputs if o is not None]
+
     logger = logging.getLogger(serial_number)
     logger.info(f"Connected to {serial_number}")
-    logger.debug(f"System info: {system_info}")
-    logger.debug(f"Debug info: {device.get_debug_info()}")
+    logger.info(f"System info: {system_info}")
+    logger.info(f"Debug info: {device.get_debug_info()}")
 
     settings = {
         "auto_zero_enabled": False,
@@ -301,31 +317,35 @@ def collect_data(device: airel.tic.Tic, stop_event: threading.Event, config: Con
 
             now = datetime.datetime.utcnow().replace(tzinfo=UTC).astimezone(config.local_tz)
 
-            out_file, is_new_file = records_file.get(now)
-            if is_new_file:
-                write_records_file_header(out_file)
+            if config.enable_file_logging:
+                out_file, is_new_file = records_file.get(now)
+                if is_new_file:
+                    write_records_file_header(out_file)
 
-            begin_time = now - datetime.timedelta(milliseconds=r["end_time_ms"] - r["begin_time_ms"])
-            cols = (
-                [
-                    str(begin_time),
-                    str(now),
-                    r["opmode"],
-                    r["a_electrometer_current_mean"],
-                    r["b_electrometer_current_mean"],
-                    r["a_electrometer_current_stddev"],
-                    r["b_electrometer_current_stddev"],
-                    r["a_electrometer_current_raw_mean"],
-                    r["b_electrometer_current_raw_mean"],
-                    r["a_electrometer_voltage"],
-                    r["b_electrometer_voltage"],
-                ]
-                + [r[f] for f in FIELDS]
-                + [""]
-            )
-            out_file.write("\t".join(format_field(x) for x in cols))
-            out_file.write("\n")
-            out_file.flush()
+                begin_time = now - datetime.timedelta(milliseconds=r["end_time_ms"] - r["begin_time_ms"])
+                cols = (
+                    [
+                        str(begin_time),
+                        str(now),
+                        r["opmode"],
+                        r["a_electrometer_current_mean"],
+                        r["b_electrometer_current_mean"],
+                        r["a_electrometer_current_stddev"],
+                        r["b_electrometer_current_stddev"],
+                        r["a_electrometer_current_raw_mean"],
+                        r["b_electrometer_current_raw_mean"],
+                        r["a_electrometer_voltage"],
+                        r["b_electrometer_voltage"],
+                    ]
+                    + [r[f] for f in FIELDS]
+                    + [""]
+                )
+                out_file.write("\t".join(format_field(x) for x in cols))
+                out_file.write("\n")
+                out_file.flush()
+
+            for o in outputs:
+                o.push_record(now, r)
 
             # fmt: off
             logger.info(
@@ -361,7 +381,7 @@ def collect_data(device: airel.tic.Tic, stop_event: threading.Event, config: Con
                     out_file.write(f"{now.timestamp()},{t},{ch},{value}\n")
 
         else:
-            logger.debug(f"Other message: {msg}")
+            logger.info(f"Other message: {msg}")
 
 
 def write_records_file_header(outfile):
@@ -422,10 +442,10 @@ def setup_logging(connection=None):
 
     hdlr = logging.StreamHandler(sys.stdout)
     hdlr.setFormatter(Formatter(f"%(asctime)s %(name)10s %(levelname)s: %(message)s"))
-    hdlr.setLevel(logging.DEBUG)
+    hdlr.setLevel(logging.INFO)
     logger.addHandler(hdlr)
 
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(logging.INFO)
 
 
 class Formatter(logging.Formatter):
