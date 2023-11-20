@@ -8,7 +8,7 @@ import sys
 import threading
 import multiprocessing
 import time
-from typing import Union, Callable
+from typing import Union, Callable, Any
 
 import airel.tic
 import yaml
@@ -122,7 +122,7 @@ class Config(BaseModel):
     allow_power_from_usb_data: bool = True
     blowers_enabled_during_zero: bool = True
     custom_settings: dict = {}
-    outputs: list[Callable[[str], Output]]
+    outputs: list[tuple[Callable[[str, Any], Output], Any]]
     enable_file_logging: bool = True
 
 
@@ -219,7 +219,16 @@ def run_many(config):
 
 
 def run_multiprocessing(dev_address: DevUsbAddress, config: dict, stop_event: multiprocessing.Event):
+    def do_nothing(sig, frame):
+        pass
+
+    signal.signal(signal.SIGINT, do_nothing)
+    signal.signal(signal.SIGTERM, do_nothing)
+
+    setup_logging()
+
     logger = logging.getLogger(dev_address.serial_number)
+    logger.info("Starting")
 
     try:
         config = Config(**config)
@@ -227,7 +236,6 @@ def run_multiprocessing(dev_address: DevUsbAddress, config: dict, stop_event: mu
         logger.error(f"Invalid configuration: {str(e)}")
         return
 
-    logger.info("Starting logger")
     logger.info(f"Using configuration: {config}")
 
     while not stop_event.is_set():
@@ -242,14 +250,14 @@ def run_multiprocessing(dev_address: DevUsbAddress, config: dict, stop_event: mu
             logging.error(f"TIC error: {type(e).__name__} {e}")
             return
 
-    logger.info("Logger stopped")
+    logger.info("Stopped")
 
 
 def collect_data(device: airel.tic.Tic, stop_event: threading.Event, config: Config):
     system_info = device.get_system_info()
     serial_number = system_info["serial_number"]
 
-    outputs = [o(serial_number) for o in config.outputs]
+    outputs = [o(serial_number=serial_number, args=args) for o, args in config.outputs]
     outputs = [o for o in outputs if o is not None]
 
     logger = logging.getLogger(serial_number)
@@ -348,7 +356,7 @@ def collect_data(device: airel.tic.Tic, stop_event: threading.Event, config: Con
                 o.push_record(now, r)
 
             # fmt: off
-            logger.info(
+            logger.debug(
                 f"{r['opmode'] + ('*' if r['is_settling'] else ' '):13}"
                 f" pos_conc: {r['pos_concentration_mean']:10.3f} neg_conc: {r['neg_concentration_mean']:10.3f} "
                 f" a: {r['a_electrometer_current_mean']:+9.2f} {r['a_electrometer_current_raw_mean'] - r['a_electrometer_current_mean']:+6.2f}"
@@ -360,7 +368,7 @@ def collect_data(device: airel.tic.Tic, stop_event: threading.Event, config: Con
 
             for f in MONITORED_COUNTERS:
                 if r[f] != counter_values[f]:
-                    logger.info(f"  {f}: {counter_values[f]} -> {r[f]}")
+                    logger.debug(f"  {f}: {counter_values[f]} -> {r[f]}")
                     counter_values[f] = r[f]
 
         elif event_type == "raw_em_record":
