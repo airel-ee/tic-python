@@ -50,6 +50,8 @@ def find_all(exclude_bus_address: Union[set[tuple[(int, int)]], None] = None) ->
             devices.append(DevUsbAddress(bus=d.bus, address=d.address, serial_number=d.serial_number))
     except ValueError as e:
         raise TicError(f"USB error: {e}") from None
+    except usb.core.USBError as e:
+        raise TicError(f"USB error: {e}") from None
 
     return devices
 
