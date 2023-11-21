@@ -8,6 +8,7 @@ import sys
 import threading
 import multiprocessing
 import time
+from collections import deque
 from typing import Union, Callable, Any
 
 import airel.tic
@@ -107,7 +108,10 @@ UTC = datetime.timezone.utc
 
 
 class Output:
-    def push_record(self, now: datetime.datetime, record: dict):
+    def device_message(self, now: datetime.datetime, message: dict):
+        pass
+
+    def logger_message(self, now: datetime.datetime, topic: str, message: Any):
         pass
 
 
@@ -184,6 +188,14 @@ def run_many(config):
 
     logging.info("Starting logger manager")
 
+    def resort(x):
+        if len(x) <= 2:
+            return x
+        else:
+            return resort(x[::2]) + resort(x[1::2][::-1])
+
+    delay_list = deque(resort(list([x / 32 for x in range(32)])))
+
     while not stop_request:
         try:
             dev_address_list = find_all(exclude_bus_address=exclude)
@@ -194,7 +206,10 @@ def run_many(config):
 
         for d in dev_address_list:
             logging.info(f"Found new device: {d.serial_number}")
-            process = multiprocessing.Process(target=run_multiprocessing, args=(d, config, stop_event))
+            c = config.copy()
+            c["cycle_shift"] = c.get("cycle_shift", 0.0) + delay_list[0]
+            process = multiprocessing.Process(target=run_multiprocessing, args=(d, c, stop_event))
+            delay_list.rotate(-1)
             process.daemon = True
             process.start()
             processes.append(TicProcess(dev_address=d, process=process))
@@ -254,142 +269,166 @@ def run_multiprocessing(dev_address: DevUsbAddress, config: dict, stop_event: mu
 
 
 def collect_data(device: airel.tic.Tic, stop_event: threading.Event, config: Config):
-    system_info = device.get_system_info()
-    serial_number = system_info["serial_number"]
+    outputs = []
+    serial_number = None
 
-    outputs = [o(serial_number=serial_number, args=args) for o, args in config.outputs]
-    outputs = [o for o in outputs if o is not None]
+    try:
+        system_info = device.get_system_info()
+        serial_number = system_info["serial_number"]
 
-    logger = logging.getLogger(serial_number)
-    logger.info(f"Connected to {serial_number}")
-    logger.info(f"System info: {system_info}")
-    logger.info(f"Debug info: {device.get_debug_info()}")
+        outputs = [o(serial_number=serial_number, args=args) for o, args in config.outputs]
+        outputs = [o for o in outputs if o is not None]
 
-    settings = {
-        "auto_zero_enabled": False,
-        "averaging_period": config.averaging_period,
-        "run_at_start": True,
-        "extended_record_fields_enabled": True,
-        "non_run_records_hidden": False,
-        "allow_power_from_usb_data": config.allow_power_from_usb_data,
-        "blowers_enabled_during_zero": config.blowers_enabled_during_zero,
-        "zero_settling_duration": config.settling_time,
-        "run_settling_duration": config.settling_time,
-    }
+        logger = logging.getLogger(serial_number)
+        logger.info(f"Connected to {serial_number}")
+        logger.info(f"System info: {system_info}")
+        debug_info = device.get_debug_info()
+        logger.info(f"Debug info: {debug_info}")
 
-    settings.update(config.custom_settings)
+        now = datetime.datetime.now(datetime.timezone.utc).astimezone(config.local_tz)
+        for o in outputs:
+            o.logger_message(now, "system_info", system_info)
+            o.logger_message(now, "debug_info", debug_info)
+            o.logger_message(now, "config", config.model_dump(mode="json", exclude=["outputs", "local_tz"]))
 
-    device.reset_settings(settings)
-    logger.info(f"Settings: {device.get_settings()}")
+        settings = {
+            "auto_zero_enabled": False,
+            "averaging_period": config.averaging_period,
+            "run_at_start": True,
+            "extended_record_fields_enabled": True,
+            "non_run_records_hidden": False,
+            "allow_power_from_usb_data": config.allow_power_from_usb_data,
+            "blowers_enabled_during_zero": config.blowers_enabled_during_zero,
+            "zero_settling_duration": config.settling_time,
+            "run_settling_duration": config.settling_time,
+        }
 
-    flag_map = device.get_flag_descriptions()
+        settings.update(config.custom_settings)
 
-    records_file = TimedFile(f"./{serial_number}/" + "{t:%Y%m%d}-block.records")
-    raw_em_file = TimedFile(f"./{serial_number}/" + "{t:%Y%m%d}.rawem")
+        device.reset_settings(settings)
 
-    cycle = MeasurementCycle(cycle_def=config.measurement_cycle, shift=config.cycle_shift)
+        read_settings = device.get_settings()
+        for o in outputs:
+            o.logger_message(now, "settings", read_settings)
 
-    counter_values = {f: 0 for f in MONITORED_COUNTERS}
+        logger.info(f"Settings: {read_settings}")
 
-    while not stop_event.is_set():
-        now = datetime.datetime.utcnow().replace(tzinfo=UTC).astimezone(config.local_tz)
-        ts = now.timestamp()
-        mode = cycle.get_mode(ts)
-        if mode is not None:
-            logger.info(
-                f"{now:%H:%M:%S.%f} set opmode {mode} until {datetime.datetime.fromtimestamp(cycle.next_change)}"
-            )
-            if isinstance(mode, dict):
-                device.set_custom_mode(mode)
-            else:
-                device.set_mode(mode)
+        flag_map = device.get_flag_descriptions()
 
-        msg = device.receive_message(timeout=min(cycle.next_change - ts, 1.0))
-        if msg is None:
-            continue
+        records_file = TimedFile(f"./{serial_number}/" + "{t:%Y%m%d}-block.records")
+        raw_em_file = TimedFile(f"./{serial_number}/" + "{t:%Y%m%d}.rawem")
 
-        event_type = msg.get("event", None)
+        cycle = MeasurementCycle(cycle_def=config.measurement_cycle, shift=config.cycle_shift)
 
-        if event_type == "record":
-            r = msg["params"]
+        counter_values = {f: 0 for f in MONITORED_COUNTERS}
 
-            # Ignore record in case the setting to include extended record fields has not yet kicked in
-            if "a_electrometer_current_mean" not in r:
+        while not stop_event.is_set():
+            now = datetime.datetime.now(datetime.timezone.utc).astimezone(config.local_tz)
+            ts = now.timestamp()
+            mode = cycle.get_mode(ts)
+            if mode is not None:
+                logger.info(
+                    f"{now:%H:%M:%S.%f} set opmode {mode} until {datetime.datetime.fromtimestamp(cycle.next_change)}"
+                )
+                if isinstance(mode, dict):
+                    device.set_custom_mode(mode)
+                else:
+                    device.set_mode(mode)
+                for o in outputs:
+                    o.logger_message(now, "set_opmode", mode)
+
+            msg = device.receive_message(timeout=min(cycle.next_change - ts, 1.0))
+            if msg is None:
                 continue
 
-            for f in FIELDS:
-                if r.get(f, None) is None:
-                    r[f] = math.nan
+            event_type = msg.get("event", None)
 
-            r["is_settling"] = 1 if r["is_settling"] else 0
+            if event_type == "record":
+                r = msg["params"]
 
-            now = datetime.datetime.utcnow().replace(tzinfo=UTC).astimezone(config.local_tz)
+                # Ignore record in case the setting to include extended record fields has not yet kicked in
+                if "a_electrometer_current_mean" not in r:
+                    continue
 
-            if config.enable_file_logging:
-                out_file, is_new_file = records_file.get(now)
-                if is_new_file:
-                    write_records_file_header(out_file)
+                for f in FIELDS:
+                    if r.get(f, None) is None:
+                        r[f] = math.nan
 
-                begin_time = now - datetime.timedelta(milliseconds=r["end_time_ms"] - r["begin_time_ms"])
-                cols = (
-                    [
-                        str(begin_time),
-                        str(now),
-                        r["opmode"],
-                        r["a_electrometer_current_mean"],
-                        r["b_electrometer_current_mean"],
-                        r["a_electrometer_current_stddev"],
-                        r["b_electrometer_current_stddev"],
-                        r["a_electrometer_current_raw_mean"],
-                        r["b_electrometer_current_raw_mean"],
-                        r["a_electrometer_voltage"],
-                        r["b_electrometer_voltage"],
-                    ]
-                    + [r[f] for f in FIELDS]
-                    + [""]
+                r["is_settling"] = 1 if r["is_settling"] else 0
+
+                now = datetime.datetime.now(datetime.timezone.utc).astimezone(config.local_tz)
+
+                if config.enable_file_logging:
+                    out_file, is_new_file = records_file.get(now)
+                    if is_new_file:
+                        write_records_file_header(out_file)
+
+                    begin_time = now - datetime.timedelta(milliseconds=r["end_time_ms"] - r["begin_time_ms"])
+                    cols = (
+                        [
+                            str(begin_time),
+                            str(now),
+                            r["opmode"],
+                            r["a_electrometer_current_mean"],
+                            r["b_electrometer_current_mean"],
+                            r["a_electrometer_current_stddev"],
+                            r["b_electrometer_current_stddev"],
+                            r["a_electrometer_current_raw_mean"],
+                            r["b_electrometer_current_raw_mean"],
+                            r["a_electrometer_voltage"],
+                            r["b_electrometer_voltage"],
+                        ]
+                        + [r[f] for f in FIELDS]
+                        + [""]
+                    )
+                    out_file.write("\t".join(format_field(x) for x in cols))
+                    out_file.write("\n")
+                    out_file.flush()
+
+                # fmt: off
+                logger.debug(
+                    f"{r['opmode'] + ('*' if r['is_settling'] else ' '):13}"
+                    f" pos_conc: {r['pos_concentration_mean']:10.3f} neg_conc: {r['neg_concentration_mean']:10.3f} "
+                    f" a: {r['a_electrometer_current_mean']:+9.2f} {r['a_electrometer_current_raw_mean'] - r['a_electrometer_current_mean']:+6.2f}"
+                    f" b: {r['b_electrometer_current_mean']:+9.2f} {r['b_electrometer_current_raw_mean'] - r['b_electrometer_current_mean']:+6.2f}"
+                    # f" acev: {r['a_cev_voltage_mean']:+6.2f} {r['a_cev_voltage_raw_mean']:+6.2f} {r['a_cev_voltage_control_mean']:+6.2f}",
+                    # f" flags:{[flag_map[f] for f in r['flags']]}"
                 )
-                out_file.write("\t".join(format_field(x) for x in cols))
-                out_file.write("\n")
-                out_file.flush()
+                # fmt: on
+
+                for f in MONITORED_COUNTERS:
+                    if r[f] != counter_values[f]:
+                        logger.debug(f"  {f}: {counter_values[f]} -> {r[f]}")
+                        counter_values[f] = r[f]
+
+            elif event_type == "raw_em_record":
+                now = datetime.datetime.now(datetime.timezone.utc)
+                params = msg.get("params", None)
+                if params:
+                    ch = params.get("channel", None)
+                    t = params.get("time", None)
+                    data = params.get("data", None)
+                    if isinstance(data, dict):
+                        value = data.get("value", None)
+                    else:
+                        value = None
+                    if ch is not None and value is not None:
+                        out_file, is_new_file = raw_em_file.get(now)
+                        if is_new_file:
+                            out_file.write("timestamp,mcutime,channel,value\n")
+                        out_file.write(f"{now.timestamp()},{t},{ch},{value}\n")
+
+            else:
+                logger.debug(f"Other message: {msg}")
 
             for o in outputs:
-                o.push_record(now, r)
-
-            # fmt: off
-            logger.debug(
-                f"{r['opmode'] + ('*' if r['is_settling'] else ' '):13}"
-                f" pos_conc: {r['pos_concentration_mean']:10.3f} neg_conc: {r['neg_concentration_mean']:10.3f} "
-                f" a: {r['a_electrometer_current_mean']:+9.2f} {r['a_electrometer_current_raw_mean'] - r['a_electrometer_current_mean']:+6.2f}"
-                f" b: {r['b_electrometer_current_mean']:+9.2f} {r['b_electrometer_current_raw_mean'] - r['b_electrometer_current_mean']:+6.2f}"
-                # f" acev: {r['a_cev_voltage_mean']:+6.2f} {r['a_cev_voltage_raw_mean']:+6.2f} {r['a_cev_voltage_control_mean']:+6.2f}",
-                # f" flags:{[flag_map[f] for f in r['flags']]}"
+                o.device_message(now, msg)
+    except airel.tic.TicError as e:
+        for o in outputs:
+            o.logger_message(
+                datetime.datetime.now(datetime.timezone.utc), "error", {"type": type(e).__name__, "args": e.args}
             )
-            # fmt: on
-
-            for f in MONITORED_COUNTERS:
-                if r[f] != counter_values[f]:
-                    logger.debug(f"  {f}: {counter_values[f]} -> {r[f]}")
-                    counter_values[f] = r[f]
-
-        elif event_type == "raw_em_record":
-            now = datetime.datetime.utcnow().replace(tzinfo=UTC)
-            params = msg.get("params", None)
-            if params:
-                ch = params.get("channel", None)
-                t = params.get("time", None)
-                data = params.get("data", None)
-                if isinstance(data, dict):
-                    value = data.get("value", None)
-                else:
-                    value = None
-                if ch is not None and value is not None:
-                    out_file, is_new_file = raw_em_file.get(now)
-                    if is_new_file:
-                        out_file.write("timestamp,mcutime,channel,value\n")
-                    out_file.write(f"{now.timestamp()},{t},{ch},{value}\n")
-
-        else:
-            logger.info(f"Other message: {msg}")
+        raise
 
 
 def write_records_file_header(outfile):

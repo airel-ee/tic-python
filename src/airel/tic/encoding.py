@@ -1,3 +1,5 @@
+import binascii
+
 from cobs import cobs
 from .exceptions import DecodingError
 
@@ -22,7 +24,7 @@ def decode(packet: bytes) -> bytes:
     try:
         contents = cobs.decode(packet)
     except cobs.DecodeError as e:
-        raise DecodingError(f"decoding error: {e}")
+        raise DecodingError("decoding error", str(e), binascii.b2a_qp(packet).decode("latin1"))
 
     if len(contents) < 2:
         raise DecodingError("packet too short")
