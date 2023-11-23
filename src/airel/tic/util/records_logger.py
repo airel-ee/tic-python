@@ -126,7 +126,7 @@ class Config(BaseModel):
     allow_power_from_usb_data: bool = True
     blowers_enabled_during_zero: bool = True
     custom_settings: dict = {}
-    outputs: list[tuple[Callable[[str, Any], Output], Any]]
+    outputs: list[tuple[Callable[[str, Any], Output], Any]] = []
     enable_file_logging: bool = True
     data_to_console: bool = False
 

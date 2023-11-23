@@ -11,6 +11,7 @@ device.reset_settings({
     "extended_record_fields_enabled": True,
     "non_run_records_hidden": False,
     "averaging_period": 30.0,
+    "data_to_console": True,
 })
 
 print("Acive settings:", device.get_settings())
