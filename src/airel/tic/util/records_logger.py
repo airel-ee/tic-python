@@ -128,6 +128,7 @@ class Config(BaseModel):
     custom_settings: dict = {}
     outputs: list[tuple[Callable[[str, Any], Output], Any]]
     enable_file_logging: bool = True
+    data_to_console: bool = False
 
 
 def run(connection: Union[str, None], config: dict):
@@ -272,6 +273,8 @@ def collect_data(device: airel.tic.Tic, stop_event: threading.Event, config: Con
     outputs = []
     serial_number = None
 
+    data_log_level = logging.INFO if config.data_to_console else logging.DEBUG
+
     try:
         system_info = device.get_system_info()
         serial_number = system_info["serial_number"]
@@ -386,7 +389,7 @@ def collect_data(device: airel.tic.Tic, stop_event: threading.Event, config: Con
                     out_file.flush()
 
                 # fmt: off
-                logger.debug(
+                logger.log(data_log_level,
                     f"{r['opmode'] + ('*' if r['is_settling'] else ' '):13}"
                     f" pos_conc: {r['pos_concentration_mean']:10.3f} neg_conc: {r['neg_concentration_mean']:10.3f} "
                     f" a: {r['a_electrometer_current_mean']:+9.2f} {r['a_electrometer_current_raw_mean'] - r['a_electrometer_current_mean']:+6.2f}"
@@ -484,7 +487,7 @@ def format_field(x):
         return str(x)
 
 
-def setup_logging(connection=None):
+def setup_logging():
     logger = logging.getLogger()
 
     hdlr = logging.StreamHandler(sys.stdout)
